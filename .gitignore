@@ -1,0 +1,54 @@
+# My personal training data and tokenizer model files
+data/
+tokenizer/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+venv/
+env/
+ENV/
+.venv/
+.ENV/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# VSCode settings
+.vscode/
+
+# PyCharm settings
+.idea/
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Logs and databases
+*.log
+*.sqlite3
+
+# Test & coverage tools
+.coverage
+htmlcov/
+.tox/
+.nox/
+pytest_cache/
+.cache/
+
+# Build directories
+build/
+dist/
+*.egg-info/
+
+# Pipenv
+Pipfile.lock
+
+# MyPy
+.mypy_cache/
+
+# PyInstaller
+*.spec*
