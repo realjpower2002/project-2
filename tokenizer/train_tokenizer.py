@@ -26,7 +26,7 @@ if os.path.exists("m.model"):
     
 else:
     import sentencepiece as spm
-    spm.SentencePieceTrainer.train('--input=spm_data.txt --model_type=bpe --model_prefix=m --bos_id=2 --eos_id=3 --bos_piece=<bos> --eos_piece=<eos> --vocab_size=10000')
+    spm.SentencePieceTrainer.train('--input=spm_data.txt --model_type=bpe --model_prefix=m --bos_id=1 --eos_id=2 --pad_id=3 --bos_piece=<bos> --eos_piece=<eos> --pad_piece=<pad> --vocab_size=10000')
 
     sp = spm.SentencePieceProcessor()
     sp.load('m.model')
