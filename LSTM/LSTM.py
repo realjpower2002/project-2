@@ -1,7 +1,7 @@
 import torch
 
 # We define the dataset class here
-class RNNDataset(torch.utils.data.Dataset):
+class LSTMDataset(torch.utils.data.Dataset):
 
     # The max prompt and completion lengths are not super long (usually much
     # less than 50 tokens)
@@ -49,19 +49,19 @@ def collate_fn(batch):
     return input_padded, target_padded
 
 """
-Defines an RNN that operates over language to autoregressively
+Defines an LSTM that operates over language to autoregressively
 predict the next token from the ones that have come before 
 (storing the previous information into a hidden state)
 """
-class RNN(torch.nn.Module):
+class LSTM(torch.nn.Module):
     def __init__(self):
-        super(RNN, self).__init__()
+        super(LSTM, self).__init__()
 
         # Embedding layer
         self.embedding = torch.nn.Embedding(num_embeddings=10000, embedding_dim=200, padding_idx=3)
 
         # Recurrent layers
-        self.rnn = torch.nn.RNN(input_size=200, hidden_size=200, num_layers=3, batch_first=True)
+        self.lstm = torch.nn.LSTM(input_size=200, hidden_size=200, num_layers=3, batch_first=True)
 
         # Passthrough to make a distribution
         self.fc = torch.nn.Linear(in_features=200,out_features=10000)
@@ -70,7 +70,7 @@ class RNN(torch.nn.Module):
     # pass it into the forward method
     def forward(self, x, hidden=None):
         embeds = self.embedding(x)
-        output, hidden = self.rnn(embeds)
+        output, hidden = self.lstm(embeds)
         logits = self.fc(output)
 
         return logits, hidden
@@ -105,7 +105,7 @@ class RNN(torch.nn.Module):
         # Returns total loss produced by the entire validation set.
         return total_loss
 
-    def train_model(self, model, train_loader, validation_loader, optimizer=None, start_epoch=0, epochs=5, lr=1e-3):
+    def train_model(self, model, train_loader, validation_loader, optimizer=None, start_epoch=0, epochs=30, lr=1e-3):
 
         # We define -100 to be the ignore index, as this integer
         # is used to denote masked tokens in the target 
@@ -154,7 +154,7 @@ class RNN(torch.nn.Module):
                 # Backpropagate Loss, to update parameters in the model
                 loss.backward()
 
-                # Gradient clipping is done to stabilize training in RNNs
+                # Gradient clipping is done to stabilize training in RNNs/LSTMs
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
                 # Advance optimizer according to learning rate
@@ -201,7 +201,7 @@ class RNN(torch.nn.Module):
             # hidden state
             output, hidden = self.forward(last_token, hidden)
 
-            # Flatten distribution output provided by RNN (shows the likely next tokens)
+            # Flatten distribution output provided by LSTM (shows the likely next tokens)
             next_token_output = output[:, -1, :] / 1.3 # temperature is 1.5
 
             # Run this distribution through softmax and sample for the next
@@ -250,21 +250,21 @@ if __name__ == "__main__":
     validation_data = data[split_point:]
 
     # Convert raw data into datasets
-    train_dataset = RNNDataset(data=train_data, sp_model=sp)
-    validation_dataset = RNNDataset(data=validation_data, sp_model=sp)
+    train_dataset = LSTMDataset(data=train_data, sp_model=sp)
+    validation_dataset = LSTMDataset(data=validation_data, sp_model=sp)
 
 
     # Convert datasets into data loaders to be consumed by model
     train_loader = torch.utils.data.DataLoader(
         train_dataset, 
-        batch_size=128, 
+        batch_size=32, 
         shuffle=True, 
         collate_fn=collate_fn
     )
 
     validation_loader = torch.utils.data.DataLoader(
         validation_dataset, 
-        batch_size=128, 
+        batch_size=32, 
         shuffle=False, # No need to shuffle validation data
         collate_fn=collate_fn
     )
@@ -272,14 +272,14 @@ if __name__ == "__main__":
 
     # Set up for training
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = RNN()
+    model = LSTM()
     model.to(device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
     start_epoch = 0
 
-    TRAIN_RNN = True
+    TRAIN_LSTM = True
 
     USE_CHECKPOINT = False
 
@@ -290,7 +290,7 @@ if __name__ == "__main__":
 
         print(f"Loading old checkpoint with Validation Loss {validation_loss:.4f}.")
 
-    if(TRAIN_RNN):
+    if(TRAIN_LSTM):
         model.train_model(model, train_loader, validation_loader, optimizer, start_epoch)
 
     print(model.embedding.num_embeddings)

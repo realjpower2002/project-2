@@ -1,79 +1,123 @@
 import torch
 
 # We define the dataset class here
-class RNNDataset(torch.utils.data.Dataset):
+class TransformerDataset(torch.utils.data.Dataset):
 
     # The max prompt and completion lengths are not super long (usually much
     # less than 50 tokens)
-    def __init__(self, data, sp_model, max_prompt_length=50, max_completion_length=10):
+    def __init__(self, data, sp_model, block_size=512):
         self.data = data
         self.sp = sp_model
-        self.max_prompt_length = max_prompt_length
-        self.max_completion_length = max_completion_length
+        self.block_size=block_size
+
+        all_text = [item["prompt"] + " " + item["completion"] for item in data]
+        tokens = []
+        for text in all_text:
+            tokens.extend(sp_model.encode(text, out_type=int))
+
+        # Store as a flat tensor
+        self.tokens = torch.tensor(tokens, dtype=torch.long)
 
     # The length of the dataset is defined just by the number of
     # lines in it
     def __len__(self):
-        return len(self.data)
+        def __len__(self):
+            return len(self.tokens) - self.block_size
+
 
     def __getitem__(self, idx):
-        item = self.data[idx]
+        # Feed in x and y as idx, idx+1 pairs. These are passed into 
+        # the model on its whole length, and each position tries to
+        # predict the next token in the sequence
+        x = self.tokens[idx : idx + self.block_size]
+        y = self.tokens[idx + 1 : idx + self.block_size + 1]
 
-        # We encode the prompt and completion into token ids
-        # on-demand as batches are created
-        prompt_ids = self.sp.encode(item["prompt"], out_type=int)[-self.max_prompt_length:]
-        
-        completion_ids = self.sp.encode(item["completion"], out_type=int)[:self.max_completion_length]
-
-        # Input IDs contains everything except the last token
-        input_ids = torch.tensor(prompt_ids + completion_ids[:-1])
-
-        # Target IDs masks everything but the completion part
-        target_ids = torch.tensor([-100]*len(prompt_ids) + completion_ids[1:])
-
-        return input_ids, target_ids
+        return x, y
 
 
 # Function used for DataLoader class 
 def collate_fn(batch):
 
-    # Convert the batch into two lists of input and target sequences
-    input_seqs, target_seqs = zip(*batch)
+    # Collate doesn't have padding, simply combines everything
+    # for later consumption
+    xs, ys = zip(*batch)
+    return torch.stack(xs), torch.stack(ys)
 
-    # Pad the input using the pad value (integer 3)
-    input_padded = torch.nn.utils.rnn.pad_sequence(input_seqs, batch_first=True, padding_value = 3)
-    
-    # Target is padded using mask value (integer -100)
-    target_padded = torch.nn.utils.rnn.pad_sequence(target_seqs, batch_first=True, padding_value = -100)
+# Positional Encoding uses interleaved positional sinusoidal
+# encoding
+class PositionalEncoding(torch.nn.Module):
+    def __init__(self, d_model, dropout=0.1, max_len=512):
+        super(PositionalEncoding, self).__init__()
+        self.dropout = torch.nn.Dropout(p=dropout)
 
-    return input_padded, target_padded
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float32).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-torch.log(torch.tensor(10000.0)) / d_model))
+
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+
+        pe = pe.unsqueeze(0) # (1, max_len, d_model)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        x = x + self.pe[:, :x.size(1), :]
+        return self.dropout(x)
 
 """
 Defines an RNN that operates over language to autoregressively
 predict the next token from the ones that have come before 
 (storing the previous information into a hidden state)
 """
-class RNN(torch.nn.Module):
+class Transformer(torch.nn.Module):
     def __init__(self):
-        super(RNN, self).__init__()
+        super(Transformer, self).__init__()
 
         # Embedding layer
-        self.embedding = torch.nn.Embedding(num_embeddings=10000, embedding_dim=200, padding_idx=3)
+        self.token_embedding = torch.nn.Embedding(num_embeddings=10000, embedding_dim=200, padding_idx=3)
 
-        # Recurrent layers
-        self.rnn = torch.nn.RNN(input_size=200, hidden_size=200, num_layers=3, batch_first=True)
+        # Positional Encoding
+        self.position_encoding = PositionalEncoding(d_model=200)
+
+        # Declaring the actual transformer layer
+        decoder_layer = torch.nn.TransformerDecoderLayer(
+            d_model = 200, nhead = 8, dim_feedforward=1024, dropout=0.1, batch_first=True
+        )
+        self.decoder = torch.nn.TransformerDecoder(decoder_layer, 3)
 
         # Passthrough to make a distribution
         self.fc = torch.nn.Linear(in_features=200,out_features=10000)
 
-    # During autoregression, we keep track of hidden state and repeatedly
-    # pass it into the forward method
-    def forward(self, x, hidden=None):
-        embeds = self.embedding(x)
-        output, hidden = self.rnn(embeds)
-        logits = self.fc(output)
+        # Used during generation
+        self.max_len = 512
 
-        return logits, hidden
+    # During autoregression, there is no hidden state, just one output
+    def forward(self, x):
+        batch_size, seq_len = x.size()
+
+        # Flatten simple index based positions for passing to the positional
+        # embedding later
+        positions = torch.arange(seq_len, device=x.device).unsqueeze(0).expand(batch_size, seq_len)
+        
+        # We add together the token embeddings and positional encoding,
+        # to maintain information about the relative positions of tokens
+        embed = self.token_embedding(x) + self.position_encoding(positions)
+
+        # We make the attention at the positions we can't see negative
+        # infinity, so they do not affect the attention score
+        causal_mask = torch.triu(torch.full((seq_len, seq_len), float("-inf"), device=x.device), diagonal=1)
+
+        # Finally, pass the target and mask to our encoder
+        out = self.decoder(
+            tgt=embed,
+            memory=None,
+            tgt_mask=causal_mask
+        )
+
+        # Pass decoder output through to fully connected layer
+        logits = self.fc(out)
+
+        return logits
     
     def evaluate_model(self, model, validation_loader, loss_func):
         model.eval()
@@ -89,7 +133,7 @@ class RNN(torch.nn.Module):
                 y_true = y_true.to(next(model.parameters()).device)
 
                 # Predict y output from dataloader
-                y_pred, _ = model(x_true)
+                y_pred = model(x_true)
 
                 loss = loss_func(
                     # We need to flatten the output of the predicted
@@ -109,7 +153,7 @@ class RNN(torch.nn.Module):
 
         # We define -100 to be the ignore index, as this integer
         # is used to denote masked tokens in the target 
-        loss_func = torch.nn.CrossEntropyLoss(ignore_index=-100)
+        loss_func = torch.nn.CrossEntropyLoss()
 
         if optimizer is None:
             optimizer = torch.optim.Adam(model.parameters(), lr=lr)
@@ -130,16 +174,11 @@ class RNN(torch.nn.Module):
                 x_true = x_true.to(next(model.parameters()).device)
                 y_true = y_true.to(next(model.parameters()).device)
 
-                for name, param in model.named_parameters():
-                    if param.grad is not None and torch.isnan(param.grad).any():
-                        print(f"NaN detected in gradients of {name}")
-
-
                 optimizer.zero_grad()
 
                 # Predict y output from dataloader
                 # (During training we throw out the hidden state)
-                y_pred, _ = model(x_true)
+                y_pred = model(x_true)
 
                 loss = loss_func(
                     # We need to flatten the output of the predicted
@@ -184,40 +223,36 @@ class RNN(torch.nn.Module):
         self.eval()
 
         prompt_ids = sp_model.encode(prompt, out_type=int)
-        prompt_tensor = torch.tensor([prompt_ids], dtype=torch.long).to(device)
-
-        # Get initial hidden state
-        _, hidden = self.forward(prompt_tensor)
-
-        generated = prompt_ids[:]
+        input_tensor = torch.tensor([prompt_ids], dtype=torch.long).to(device)
 
         for _ in range(max_new_tokens):
 
-            # Get the last token which has been generated (starting from the end of the
-            # prompt and put it into memory
-            last_token = torch.tensor([[generated[-1]]], dtype=torch.long).to(device)
+            if input_tensor.size(1) > self.max_len:
+                input_tensor = input_tensor[:, :self.max_len:]
 
-            # Get the output and hidden state from the last token and the previous
-            # hidden state
-            output, hidden = self.forward(last_token, hidden)
+            logits = self.forward(input_tensor)
 
             # Flatten distribution output provided by RNN (shows the likely next tokens)
-            next_token_output = output[:, -1, :] / 1.3 # temperature is 1.5
+            next_token_logits = logits[:, -1, :] / 1.3 # temperature is 1.5
 
             # Run this distribution through softmax and sample for the next
             # token
-            probs = torch.softmax(next_token_output, dim=-1)
-            next_token_id = torch.multinomial(probs, num_samples=1).item()
+            probs = torch.softmax(next_token_logits, dim=-1)
+            next_token = torch.multinomial(probs, num_samples=1).item()
 
-            generated.append(next_token_id)
+            # Convert token to 1D tensor
+            next_token = torch.tensor([[next_token]], dtype=torch.long, device=device)
 
-            print(next_token_id, sp_model.decode([next_token_id]))
+            # At each generation stage, the new token is added to the end
+            # of the input tensor, and the whole thing is run through the
+            # model again
+            input_tensor = torch.cat([input_tensor, next_token], dim=1)
 
             # If the next token ID is eos, then break
-            if(next_token_id) == 2:
+            if(next_token.item()) == 2:
                 break
         
-        return sp_model.decode(generated)
+        return sp_model.decode(input_tensor[0].tolist())
 
 # Function to load a checkpoint after we perform a full training run
 def load_checkpoint(model, optimizer, path):
@@ -250,8 +285,8 @@ if __name__ == "__main__":
     validation_data = data[split_point:]
 
     # Convert raw data into datasets
-    train_dataset = RNNDataset(data=train_data, sp_model=sp)
-    validation_dataset = RNNDataset(data=validation_data, sp_model=sp)
+    train_dataset = TransformerDataset(data=train_data, sp_model=sp, block_size=512)
+    validation_dataset = TransformerDataset(data=validation_data, sp_model=sp, block_size=512)
 
 
     # Convert datasets into data loaders to be consumed by model
@@ -272,7 +307,7 @@ if __name__ == "__main__":
 
     # Set up for training
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = RNN()
+    model = Transformer()
     model.to(device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
@@ -293,7 +328,7 @@ if __name__ == "__main__":
     if(TRAIN_RNN):
         model.train_model(model, train_loader, validation_loader, optimizer, start_epoch)
 
-    print(model.embedding.num_embeddings)
+    print(model.token_embedding.num_embeddings)
 
     print(model.generate(prompt="Which do you prefer? Dogs or cats? ",sp_model=sp))
 
