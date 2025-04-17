@@ -21,12 +21,11 @@ class TransformerDataset(torch.utils.data.Dataset):
     # The length of the dataset is defined just by the number of
     # lines in it
     def __len__(self):
-        def __len__(self):
-            return len(self.tokens) - self.block_size
+        return max(0, len(self.tokens) - self.block_size)
 
 
     def __getitem__(self, idx):
-        # Feed in x and y as idx, idx+1 pairs. These are passed into 
+        # Feed in x and y as idx, idx+1 pairs. These are passed into
         # the model on its whole length, and each position tries to
         # predict the next token in the sequence
         x = self.tokens[idx : idx + self.block_size]
@@ -40,8 +39,8 @@ def collate_fn(batch):
 
     # Collate doesn't have padding, simply combines everything
     # for later consumption
-    xs, ys = zip(*batch)
-    return torch.stack(xs), torch.stack(ys)
+    x_true, y_true = zip(*batch)
+    return torch.stack(x_true), torch.stack(y_true)
 
 # Positional Encoding uses interleaved positional sinusoidal
 # encoding
@@ -74,19 +73,21 @@ class Transformer(torch.nn.Module):
         super(Transformer, self).__init__()
 
         # Embedding layer
-        self.token_embedding = torch.nn.Embedding(num_embeddings=10000, embedding_dim=200, padding_idx=3)
+        self.token_embedding = torch.nn.Embedding(num_embeddings=10000, embedding_dim=256, padding_idx=3)
 
         # Positional Encoding
-        self.position_encoding = PositionalEncoding(d_model=200)
+        self.position_encoding = PositionalEncoding(d_model=256)
 
-        # Declaring the actual transformer layer
-        decoder_layer = torch.nn.TransformerDecoderLayer(
-            d_model = 200, nhead = 8, dim_feedforward=1024, dropout=0.1, batch_first=True
+        # We treat a transformer encoder layer like a decoder here by using
+        # 
+        encoder_layer = torch.nn.TransformerEncoderLayer(
+            d_model=256, nhead=4, dim_feedforward=1024, dropout=0.1, batch_first=True
         )
-        self.decoder = torch.nn.TransformerDecoder(decoder_layer, 3)
+        self.decoder = torch.nn.TransformerEncoder(encoder_layer, num_layers=3)
+
 
         # Passthrough to make a distribution
-        self.fc = torch.nn.Linear(in_features=200,out_features=10000)
+        self.fc = torch.nn.Linear(in_features=256,out_features=10000)
 
         # Used during generation
         self.max_len = 512
@@ -94,14 +95,12 @@ class Transformer(torch.nn.Module):
     # During autoregression, there is no hidden state, just one output
     def forward(self, x):
         batch_size, seq_len = x.size()
-
-        # Flatten simple index based positions for passing to the positional
-        # embedding later
-        positions = torch.arange(seq_len, device=x.device).unsqueeze(0).expand(batch_size, seq_len)
         
         # We add together the token embeddings and positional encoding,
         # to maintain information about the relative positions of tokens
-        embed = self.token_embedding(x) + self.position_encoding(positions)
+        embed = self.token_embedding(x)
+
+        embed = self.position_encoding(embed)
 
         # We make the attention at the positions we can't see negative
         # infinity, so they do not affect the attention score
@@ -109,9 +108,8 @@ class Transformer(torch.nn.Module):
 
         # Finally, pass the target and mask to our encoder
         out = self.decoder(
-            tgt=embed,
-            memory=None,
-            tgt_mask=causal_mask
+            src=embed,
+            mask=causal_mask
         )
 
         # Pass decoder output through to fully connected layer
@@ -148,6 +146,42 @@ class Transformer(torch.nn.Module):
             
         # Returns total loss produced by the entire validation set.
         return total_loss
+    
+    @torch.no_grad()
+    def prompt(self, prompt, sp_model, max_new_tokens=20, device="cuda"):
+        self.eval()
+
+        prompt_ids = sp_model.encode(prompt, out_type=int)
+        input_tensor = torch.tensor([prompt_ids], dtype=torch.long).to(device)
+
+        for _ in range(max_new_tokens):
+
+            if input_tensor.size(1) > self.max_len:
+                input_tensor = input_tensor[:, :self.max_len:]
+
+            logits = self.forward(input_tensor)
+
+            # Flatten distribution output provided by RNN (shows the likely next tokens)
+            next_token_logits = logits[:, -1, :] / 0.8 # temperature is 1.5
+
+            # Run this distribution through softmax and sample for the next
+            # token
+            probs = torch.softmax(next_token_logits, dim=-1)
+            next_token = torch.multinomial(probs, num_samples=1).item()
+
+            # Convert token to 1D tensor
+            next_token = torch.tensor([[next_token]], dtype=torch.long, device=device)
+
+            # At each generation stage, the new token is added to the end
+            # of the input tensor, and the whole thing is run through the
+            # model again
+            input_tensor = torch.cat([input_tensor, next_token], dim=1)
+
+            # If the next token ID is eos, then break
+            if(next_token.item()) == 2:
+                break
+        
+        return sp_model.decode(input_tensor[0].tolist())
 
     def train_model(self, model, train_loader, validation_loader, optimizer=None, start_epoch=0, epochs=5, lr=1e-3):
 
@@ -166,7 +200,7 @@ class Transformer(torch.nn.Module):
             # after the end of each epoch
             model.train()
 
-            current_loss = 0
+            training_loss = 0
 
             for x_true, y_true in train_loader:
 
@@ -188,19 +222,21 @@ class Transformer(torch.nn.Module):
                     y_true.view(-1)
                 )
 
-                print("Training Loss : ",loss)
+                # print("Training Loss : ",loss)
 
                 # Backpropagate Loss, to update parameters in the model
                 loss.backward()
 
                 # Gradient clipping is done to stabilize training in RNNs
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
                 # Advance optimizer according to learning rate
                 optimizer.step()
 
                 # This is kept for record keeping and printing later
-                current_loss = loss
+                training_loss += loss
+
+                print("Loss for this batch : ",loss)
             
             # Run evaluation
             validation_loss = self.evaluate_model(model=model, validation_loader=validation_loader, loss_func=loss_func)
@@ -213,46 +249,124 @@ class Transformer(torch.nn.Module):
                 'epoch': epoch+1,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
-                'validation_loss': validation_loss,
+                'validation_loss': validation_loss/len(validation_loader),
+                'training_loss' : training_loss/len(train_loader),
             }, f"checkpoints/checkpoint_epoch_{epoch+1}_{validation_loss/len(validation_loader)}.pt")
 
-            print(f"Epoch {epoch+1}, Training Loss: {current_loss:.4f}, Validation Loss: {validation_loss / len(validation_loader):.4f}")
+            print(f"Epoch {epoch+1}, Training Loss: {current_loss/len(train_loader):.4f}, Validation Loss: {validation_loss / len(validation_loader):.4f}")
+            print(model.prompt(prompt="Which do you prefer? Dogs or cats? ",sp_model=sp))
+
+def perplexity(model, test_loader):
+
+    loop = 0
+
+    total_loss = 0
+    total_tokens = 0
+
+    # We get the cross entropy loss over the validation set
+    for x, y in test_loader:
+
+        # if(loop == 0):
+        #     print(x[0])
+        #     print(y[0])
+        #     sp_model.decode(x[0].tolist())
+        #     sp_model.decode(y[0].tolist())
+
+        # Send x and y to the cuda device (GPU)
+        x = x.to("cuda")
+        y = y.to("cuda")
+
+        # Predict y token scores at each position
+        # in each sequence
+        logits = model(x)
+
+        loss_function = torch.nn.CrossEntropyLoss(ignore_index=3)
+
+        # flatten logits into a 2D Tensor, where each batch is lined
+        # up on their length and each token in these is listed as a
+        # score distribution
+        #
+        # This essentially melts logits into (batch * seq_len) X (vocab_size)
+        # (logits.size(-1) is vocab_size, -1 is inferred)
+        flattened_logits = logits.view(-1, logits.size(-1))
+
+        # Purely flatten y into a 1D tensor
+        flattened_y = y.view(-1)
+
+        # Compare logits scores to ground truth
+        #
+        # Note this also computes NLL, which is then reversed during
+        # exponentiation
+        loss = loss_function(flattened_logits, flattened_y)
+
+        # Get total number of tokens loss is calculated for
+        valid_tokens = (y != 3).sum().item() if (y == 3).any() else y.numel()
+
+        # Get total loss for all valid tokens by multiplying num tokens
+        # by average loss
+        total_loss += loss.item() * valid_tokens
+
+        # Keep track of total number of tokens loss was calculated for
+        total_tokens += valid_tokens
+
+
+
+        # if(loop == 0):
+        #     print(logits)
+
+        # if(loop == 0):
+        #     print("Logits (perplexity) : ",logits)
+        #     print("Logits shape : ", logits[0], logits[1])
+
+        # loop += 1
     
-    @torch.no_grad()
-    def generate(self, prompt, sp_model, max_new_tokens=20, device="cpu"):
-        self.eval()
+    # Return the loss figure over the total number of tokens (essentially
+    # e^(average loss))
+    return torch.exp(torch.tensor(total_loss / total_tokens))
 
-        prompt_ids = sp_model.encode(prompt, out_type=int)
-        input_tensor = torch.tensor([prompt_ids], dtype=torch.long).to(device)
+from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
+import tqdm
 
-        for _ in range(max_new_tokens):
+def bleu(model, test_data, sp_model):
 
-            if input_tensor.size(1) > self.max_len:
-                input_tensor = input_tensor[:, :self.max_len:]
+    smoothing_function = SmoothingFunction().method1
 
-            logits = self.forward(input_tensor)
+    scores = []
 
-            # Flatten distribution output provided by RNN (shows the likely next tokens)
-            next_token_logits = logits[:, -1, :] / 1.3 # temperature is 1.5
+    loop = 0
 
-            # Run this distribution through softmax and sample for the next
-            # token
-            probs = torch.softmax(next_token_logits, dim=-1)
-            next_token = torch.multinomial(probs, num_samples=1).item()
+    for idx, item in tqdm.tqdm(enumerate(test_data), desc="Calculating BLEU Score", total=len(test_data), unit="samples"):
 
-            # Convert token to 1D tensor
-            next_token = torch.tensor([[next_token]], dtype=torch.long, device=device)
+        prompt = item["prompt"]
+        completion = item["completion"]
 
-            # At each generation stage, the new token is added to the end
-            # of the input tensor, and the whole thing is run through the
-            # model again
-            input_tensor = torch.cat([input_tensor, next_token], dim=1)
+        # This doesn't really occur in the test example, but
+        # it could potentially cause an out of bounds issue
+        if(len(prompt) < 5):
+            continue
 
-            # If the next token ID is eos, then break
-            if(next_token.item()) == 2:
-                break
-        
-        return sp_model.decode(input_tensor[0].tolist())
+        total = sp_model.encode(prompt + " " + completion, out_type = int)
+
+        # Just shift the completion to contain a couple more tokens
+        prompt = total[:len(prompt)-2]
+        completion = total[-1 - len(completion) - 1:]
+
+        prompt_str = sp_model.decode(prompt)
+
+        reference = sp_model.decode(completion)
+        reference_tokens = sp_model.encode(reference, out_type=str)
+
+        generated = model.prompt(prompt_str, sp_model)
+
+        candidate = sp_model.encode(generated, out_type=str)
+
+        # See how much prompt and completion align essentially
+        score = sentence_bleu([reference_tokens], candidate, smoothing_function=smoothing_function)
+
+        scores.append(score)
+    
+    # Get average BLEU score over the entire test set essentially
+    return sum(scores) / len(scores) if scores else 0.0
 
 # Function to load a checkpoint after we perform a full training run
 def load_checkpoint(model, optimizer, path):
@@ -288,6 +402,9 @@ if __name__ == "__main__":
     train_dataset = TransformerDataset(data=train_data, sp_model=sp, block_size=512)
     validation_dataset = TransformerDataset(data=validation_data, sp_model=sp, block_size=512)
 
+    print(type(train_dataset))
+    print(type(validation_dataset))
+
 
     # Convert datasets into data loaders to be consumed by model
     train_loader = torch.utils.data.DataLoader(
@@ -314,12 +431,12 @@ if __name__ == "__main__":
 
     start_epoch = 0
 
-    TRAIN_RNN = True
+    TRAIN_RNN = False
 
-    USE_CHECKPOINT = False
+    USE_CHECKPOINT = True
 
     if(USE_CHECKPOINT):
-        path = "checkpoints/checkpoint_epoch_1_791.9348198771477.pt"
+        path = "checkpoints/checkpoint_epoch_5_5.180556119165027.pt"
 
         start_epoch, validation_loss = load_checkpoint(model, optimizer, path)
 
@@ -330,5 +447,32 @@ if __name__ == "__main__":
 
     print(model.token_embedding.num_embeddings)
 
-    print(model.generate(prompt="Which do you prefer? Dogs or cats? ",sp_model=sp))
+    print(model.prompt(prompt="Which do you prefer? Dogs or cats? ",sp_model=sp))
+
+    # Testing
+
+    # Loading the model requires an enormous amount of GPU memory
+    torch.cuda.empty_cache()
+
+    test_data = []
+
+    # Open test dataset after running model
+    with open("../data/test.jsonl", "r") as f:
+        for line in f:
+            test_data.append(json.loads(line))
+
+    # Convert raw data into dataset for perplexity
+    test_dataset = TransformerDataset(data=test_data, sp_model=sp)
+
+    # Convert datasets into data loaders to be consumed by model
+    test_loader = torch.utils.data.DataLoader(
+        test_dataset, 
+        batch_size=128, 
+        shuffle=False, 
+        collate_fn=collate_fn,
+        pin_memory=True
+    )
+
+    print("Perplexity Score : ", perplexity(model, test_loader)) # 171.7867
+    print("BLEU Score : ",bleu(model, test_data, sp)) # 
 

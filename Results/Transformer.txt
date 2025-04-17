@@ -1,0 +1,5 @@
+checkpoint_epoch_1_4.828678786722383.pt  3.5064
+checkpoint_epoch_2_4.974066402229409.pt  3.2882
+checkpoint_epoch_3_5.0562071108048965.pt 3.2341
+checkpoint_epoch_4_5.103757124502265.pt  3.1969
+checkpoint_epoch_5_5.180556119165027.pt  3.0979
