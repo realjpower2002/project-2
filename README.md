@@ -9,3 +9,10 @@ score. To train these models, set the constant USE_CHECKPOINT in the code
 file to "False" and the constant TRAIN to "True", and then run the file on
 your own custom data, provided in the form of prompt/completion in jsonl format.
 
+To clone this repo, it is necessary to use git LFS to download the model
+checkpoints. This can be done as such : 
+
+`
+git lfs install
+git clone https://github.com/realjpower2002/project-2.git
+`
