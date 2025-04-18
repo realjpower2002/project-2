@@ -13,6 +13,6 @@ To clone this repo, it is necessary to use git LFS to download the model
 checkpoints. This can be done as such : 
 
 `
-git lfs install
+git lfs install && 
 git clone https://github.com/realjpower2002/project-2.git
 `
