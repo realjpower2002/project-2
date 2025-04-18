@@ -1,5 +1,10 @@
-checkpoint_epoch_1_4.828678786722383.pt  3.5064
-checkpoint_epoch_2_4.974066402229409.pt  3.2882
-checkpoint_epoch_3_5.0562071108048965.pt 3.2341
-checkpoint_epoch_4_5.103757124502265.pt  3.1969
-checkpoint_epoch_5_5.180556119165027.pt  3.0979
+checkpoint_epoch_1_ 4.828678786722383.pt  3.5064
+checkpoint_epoch_2_ 4.974066402229409.pt  3.2882
+checkpoint_epoch_3_ 5.0562071108048965.pt 3.2341
+checkpoint_epoch_4_ 5.103757124502265.pt  3.1969
+checkpoint_epoch_5_ 5.180556119165027.pt  3.0979
+
+How was your day this morning? I could have been back to the river. I have no doubt whatever to my duel. I shall have a great deal of trouble or a house. The Count of Monte Cristo reappeared, stumbled on the ground. I have the glory of your, he said, shaking his head, and seized his head and threw himself flat on his shoulders; so that they were all ragged, and they cut off their heads and put them into the river; but when they had carried them, they came nearer, they saw them going to my house and brought them water, and they saw a beautiful purple dance in the wide world. Then I came
+
+Perplexity : 171.7867
+Bleu Score : 0.06170275634369838

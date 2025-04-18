@@ -146,7 +146,7 @@ class RNN(torch.nn.Module):
             #
             # This needs to be cast to float because cuda can cause precision issues
             # sometimes.
-            next_token_output = (output[:, -1, :]).float() / 1.0 # temperature is 0.8
+            next_token_output = (output[:, -1, :]).float() / 0.8 # temperature is 0.8
 
             # Run this distribution through softmax and sample for the next
             # token
@@ -163,7 +163,7 @@ class RNN(torch.nn.Module):
         
         return sp_model.decode(generated)
     
-    def train_model(self, model, train_loader, validation_loader, optimizer=None, start_epoch=0, epochs=30, lr=1e-4):
+    def train_model(self, model, train_loader, validation_loader, optimizer=None, start_epoch=0, epochs=300, lr=1e-4):
 
         # We define -100 to be the ignore index, as this integer
         # is used to denote masked tokens in the target 
@@ -241,15 +241,15 @@ class RNN(torch.nn.Module):
             print(f"Epoch {epoch+1}, Training Loss: {training_loss/len(train_loader):.4f}, Validation Loss: {validation_loss / len(validation_loader):.4f}")
             print(model.prompt(prompt="Which do you prefer? Dogs or cats? ",sp_model=sp))
 
-def perplexity(model, test_loader):
+import tqdm
 
-    loop = 0
+def perplexity(model, test_loader):
 
     total_loss = 0
     total_tokens = 0
 
     # We get the cross entropy loss over the validation set
-    for x, y in test_loader:
+    for sample_num, (x, y) in tqdm.tqdm(enumerate(test_loader), desc="Calculating Perplexity Score", total=len(test_loader), unit="samples"):
 
         # if(loop == 0):
         #     print(x[0])
@@ -310,15 +310,12 @@ def perplexity(model, test_loader):
     return torch.exp(torch.tensor(total_loss / total_tokens))
 
 from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
-import tqdm
 
 def bleu(model, test_data, sp_model):
 
     smoothing_function = SmoothingFunction().method1
 
     scores = []
-
-    loop = 0
 
     for idx, item in tqdm.tqdm(enumerate(test_data), desc="Calculating BLEU Score", total=len(test_data), unit="samples"):
 
@@ -419,34 +416,27 @@ if __name__ == "__main__":
 
     start_epoch = 0
 
-    TRAIN_RNN = False
+    TRAIN = False
 
     USE_CHECKPOINT = True
 
     if(USE_CHECKPOINT):
-        path = "checkpoints/checkpoint_epoch_30_5.487526297569275.pt"
+        path = "model.pt"
 
         start_epoch, validation_loss = load_checkpoint(model, optimizer, path)
 
         print(f"Loading old checkpoint with Validation Loss {validation_loss:.4f}.")
 
-    if(TRAIN_RNN):
+    if(TRAIN):
         model.train_model(model, train_loader, validation_loader, optimizer, start_epoch)
 
 
     # Manual Evaluation 
+
     print(model.prompt(prompt="Which do you prefer? Dogs or cats? ",sp_model=sp))
 
-    print(model.prompt("How was your day this morning?", sp_model=sp))
-
-
-    # # Model graphical visualization
-    # from torchview import draw_graph
-
-    # model_graph = draw_graph(model, input_size=(512, 50))
-    # model_graph.visual_graph
+    print(model.prompt(prompt="How was your day this morning?", sp_model=sp))
     
-
     # Testing
 
     test_data = []

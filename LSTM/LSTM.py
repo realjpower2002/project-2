@@ -141,7 +141,7 @@ class LSTM(torch.nn.Module):
             output, hidden = self.forward(last_token, hidden)
 
             # Flatten distribution output provided by LSTM (shows the likely next tokens)
-            next_token_output = output[:, -1, :] / 0.8 # temperature is 1.5
+            next_token_output = output[:, -1, :] / 0.8 # temperature is 0.8
 
             # Run this distribution through softmax and sample for the next
             # token
@@ -158,7 +158,7 @@ class LSTM(torch.nn.Module):
         
         return sp_model.decode(generated)
 
-    def train_model(self, model, train_loader, validation_loader, optimizer=None, start_epoch=0, epochs=30, lr=1e-4):
+    def train_model(self, model, train_loader, validation_loader, optimizer=None, start_epoch=0, epochs=1000, lr=1e-4):
 
         # We define -100 to be the ignore index, as this integer
         # is used to denote masked tokens in the target 
@@ -231,15 +231,15 @@ class LSTM(torch.nn.Module):
             print(f"Epoch {epoch+1}, Training Loss: {training_loss/len(train_loader):.4f}, Validation Loss: {validation_loss / len(validation_loader):.4f}")
             print(model.prompt(prompt="Which do you prefer? Dogs or cats? ",sp_model=sp))
 
-def perplexity(model, test_loader):
+import tqdm
 
-    loop = 0
+def perplexity(model, test_loader):
 
     total_loss = 0
     total_tokens = 0
 
     # We get the cross entropy loss over the validation set
-    for x, y in test_loader:
+    for sample_num, (x, y) in tqdm.tqdm(enumerate(test_loader), desc="Calculating Perplexity Score", total=len(test_loader), unit="samples"):
 
         # if(loop == 0):
         #     print(x[0])
@@ -300,15 +300,12 @@ def perplexity(model, test_loader):
     return torch.exp(torch.tensor(total_loss / total_tokens))
 
 from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
-import tqdm
 
 def bleu(model, test_data, sp_model):
 
     smoothing_function = SmoothingFunction().method1
 
     scores = []
-
-    loop = 0
 
     for idx, item in tqdm.tqdm(enumerate(test_data), desc="Calculating BLEU Score", total=len(test_data), unit="samples"):
 
@@ -381,14 +378,14 @@ if __name__ == "__main__":
     # Convert datasets into data loaders to be consumed by model
     train_loader = torch.utils.data.DataLoader(
         train_dataset, 
-        batch_size=32, 
+        batch_size=512, 
         shuffle=True, 
         collate_fn=collate_fn
     )
 
     validation_loader = torch.utils.data.DataLoader(
         validation_dataset, 
-        batch_size=32, 
+        batch_size=512, 
         shuffle=False, # No need to shuffle validation data
         collate_fn=collate_fn
     )
@@ -405,27 +402,25 @@ if __name__ == "__main__":
 
     start_epoch = 0
 
-    TRAIN_LSTM = True
+    TRAIN = False
 
-    USE_CHECKPOINT = False
+    USE_CHECKPOINT = True
 
     if(USE_CHECKPOINT):
-        path = "checkpoints/checkpoint_epoch_1_791.9348198771477.pt"
+        path = "model.pt"
 
         start_epoch, validation_loss = load_checkpoint(model, optimizer, path)
 
         print(f"Loading old checkpoint with Validation Loss {validation_loss:.4f}.")
 
-    if(TRAIN_LSTM):
+    if(TRAIN):
         model.train_model(model, train_loader, validation_loader, optimizer, start_epoch)
-
-    print(model.embedding.num_embeddings)
 
     # Manual evaluation
 
     print(model.prompt(prompt="Which do you prefer? Dogs or cats? ",sp_model=sp))
 
-    print(model.prompt("How was your day this morning?", sp_model=sp))
+    print(model.prompt(prompt="How was your day this morning?", sp_model=sp))
 
     # Testing
 

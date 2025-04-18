@@ -1,11 +1,19 @@
-# My personal training data and tokenizer model files
+# My personal training data
 data/
-tokenizer/
 
 # Checkpoints
 LSTM/checkpoints/
 RNN/checkpoints/
+LSTM/checkpoints2/
+RNN/checkpoints2/
 Transformer/checkpoints/
+
+LSTM/model.pt
+RNN/model.pt
+Transformer/model.pt
+
+# Results Notes
+Results/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -63,3 +63,5 @@ Which do you prefer? Dogs or cats? do not become the day is not not sleeping and
 Perplexity Score :  tensor(191.2946)
 Calculating BLEU Score: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 9899/9899 [17:40<00:00,  9.33samples/s]
 BLEU Score :  0.061786908096881546
+
+How was your day this morning? go, he should springing it, I mean. drive. go, you. concluded: have

@@ -256,15 +256,15 @@ class Transformer(torch.nn.Module):
             print(f"Epoch {epoch+1}, Training Loss: {current_loss/len(train_loader):.4f}, Validation Loss: {validation_loss / len(validation_loader):.4f}")
             print(model.prompt(prompt="Which do you prefer? Dogs or cats? ",sp_model=sp))
 
-def perplexity(model, test_loader):
+import tqdm
 
-    loop = 0
+def perplexity(model, test_loader):
 
     total_loss = 0
     total_tokens = 0
 
     # We get the cross entropy loss over the validation set
-    for x, y in test_loader:
+    for sample_num, (x, y) in tqdm.tqdm(enumerate(test_loader), desc="Calculating Perplexity Score", total=len(test_loader), unit="samples"):
 
         # if(loop == 0):
         #     print(x[0])
@@ -325,15 +325,12 @@ def perplexity(model, test_loader):
     return torch.exp(torch.tensor(total_loss / total_tokens))
 
 from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
-import tqdm
 
 def bleu(model, test_data, sp_model):
 
     smoothing_function = SmoothingFunction().method1
 
     scores = []
-
-    loop = 0
 
     for idx, item in tqdm.tqdm(enumerate(test_data), desc="Calculating BLEU Score", total=len(test_data), unit="samples"):
 
@@ -431,23 +428,25 @@ if __name__ == "__main__":
 
     start_epoch = 0
 
-    TRAIN_RNN = False
+    TRAIN = False
 
     USE_CHECKPOINT = True
 
     if(USE_CHECKPOINT):
-        path = "checkpoints/checkpoint_epoch_5_5.180556119165027.pt"
+        path = "model.pt"
 
         start_epoch, validation_loss = load_checkpoint(model, optimizer, path)
 
         print(f"Loading old checkpoint with Validation Loss {validation_loss:.4f}.")
 
-    if(TRAIN_RNN):
+    if(TRAIN):
         model.train_model(model, train_loader, validation_loader, optimizer, start_epoch)
 
-    print(model.token_embedding.num_embeddings)
+    # Manual Evaluation
 
     print(model.prompt(prompt="Which do you prefer? Dogs or cats? ",sp_model=sp))
+
+    print(model.prompt(prompt="How was your day this morning?", sp_model=sp, max_new_tokens=128))
 
     # Testing
 
